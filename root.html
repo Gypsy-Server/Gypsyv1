@@ -290,10 +290,23 @@ input[type="file"]{display:none;}
   </div>
 </div>
 
+<div id="subnetDialog" style="display:none;position:fixed;inset:0;background:rgba(10,10,15,.95);z-index:210;flex-direction:column;align-items:center;justify-content:center;gap:16px;">
+  <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:3px;color:var(--muted);">CONFIRM SUBNET</div>
+  <div style="display:flex;align-items:center;gap:10px;margin-top:4px;">
+    <input id="subnetInput" class="manual-input" style="width:170px;font-size:16px;text-align:center;padding:10px 12px;letter-spacing:2px;" placeholder="e.g. 10.140.140" />
+    <span style="font-family:'Space Mono',monospace;color:var(--muted);font-size:14px;">.1–254</span>
+  </div>
+  <div style="font-family:'Space Mono',monospace;font-size:9px;color:var(--muted);letter-spacing:1px;">First three octets of your local network</div>
+  <div style="display:flex;gap:10px;margin-top:6px;">
+    <button class="scan-btn" style="clip-path:none;padding:10px 28px;font-size:12px;" onclick="confirmSubnet()">⬡ SCAN</button>
+    <button class="cancel-btn" style="margin-top:0;" onclick="closeSubnetDialog()">✕ CANCEL</button>
+  </div>
+</div>
+
 <div class="scanning-overlay" id="scanOverlay">
   <div class="scan-ring"></div>
   <div class="scan-label">SCANNING NETWORK</div>
-  <div class="scan-sub" id="scanStatus">Auto-detecting subnet...</div>
+  <div class="scan-sub" id="scanStatus">Probing...</div>
   <button class="cancel-btn" onclick="cancelScan()">✕ CANCEL</button>
 </div>
 
@@ -324,64 +337,48 @@ function toggleTheme(){
 })();
 
 // ── SUBNET DETECT ─────────────────────────────────────────────────────────
-function getSubnetFromHostname(){
+function guessSubnet(){
+  // Best-effort: use hostname if served from a local IP
   const h=window.location.hostname;
-  if(h&&h!=='localhost'&&h!=='127.0.0.1'){
+  if(h&&h!=='localhost'&&h!=='127.0.0.1'&&!/[a-zA-Z]/.test(h)){
     const p=h.split('.');
     if(p.length===4) return p.slice(0,3).join('.');
   }
-  return null;
-}
-
-function getLocalIPviaWebRTC(){
-  return new Promise(resolve=>{
-    const pc=new RTCPeerConnection({iceServers:[]});
-    const dc=pc.createDataChannel('');
-    pc.createOffer().then(o=>pc.setLocalDescription(o));
-    const timer=setTimeout(()=>{pc.close();resolve(null);},2000);
-    pc.onicecandidate=e=>{
-      if(!e||!e.candidate||!e.candidate.candidate) return;
-      const m=e.candidate.candidate.match(/(\d+\.\d+\.\d+\.\d+)/);
-      if(m){
-        const ip=m[1];
-        // skip link-local and loopback
-        if(!ip.startsWith('169.254.')&&ip!=='127.0.0.1'&&ip!=='0.0.0.0'){
-          clearTimeout(timer);
-          pc.close();
-          resolve(ip);
-        }
-      }
-    };
-  });
-}
-
-async function getSubnet(){
-  // 1. Try hostname (works when page is served from the local network IP)
-  const fromHost=getSubnetFromHostname();
-  if(fromHost) return fromHost;
-  // 2. Use WebRTC to find the browser's real local IP
-  try{
-    const localIP=await getLocalIPviaWebRTC();
-    if(localIP){
-      const parts=localIP.split('.');
-      if(parts.length===4) return parts.slice(0,3).join('.');
-    }
-  }catch(e){}
-  // 3. Fallback
-  return '192.168.1';
+  // Check localStorage for last used subnet
+  return localStorage.getItem('gypsy-subnet')||'192.168.1';
 }
 
 // ── SCAN ──────────────────────────────────────────────────────────────────
 function cancelScan(){
   S.cancelScan=true;
 }
-async function startScan(){
+function closeSubnetDialog(){
+  document.getElementById('subnetDialog').style.display='none';
+  document.getElementById('scanBtn').disabled=false;
+}
+function startScan(){
   if(S.scanning) return;
-  S.scanning=true; S.cancelScan=false;
   document.getElementById('scanBtn').disabled=true;
+  // Pre-fill with best guess, let user confirm/correct
+  const guess=guessSubnet();
+  document.getElementById('subnetInput').value=guess;
+  document.getElementById('subnetDialog').style.display='flex';
+}
+async function confirmSubnet(){
+  const raw=document.getElementById('subnetInput').value.trim();
+  // Accept "10.140.140" or "10.140.140.x" or "10.140.140.204" — strip last octet
+  const parts=raw.replace(/\.\d+$/,'').split('.');
+  if(parts.length!==3||parts.some(p=>isNaN(p)||p==='')){
+    document.getElementById('subnetInput').style.borderColor='var(--danger)';
+    setTimeout(()=>document.getElementById('subnetInput').style.borderColor='',1200);
+    return;
+  }
+  const subnet=parts.join('.');
+  localStorage.setItem('gypsy-subnet',subnet);
+  document.getElementById('subnetDialog').style.display='none';
+
+  S.scanning=true; S.cancelScan=false;
   document.getElementById('scanOverlay').classList.add('active');
-  document.getElementById('scanStatus').textContent='Auto-detecting subnet...';
-  const subnet=await getSubnet();
   document.getElementById('scanStatus').textContent=`Probing ${subnet}.1–254...`;
   const sp=document.getElementById('scanProgress');
   sp.classList.add('active');
