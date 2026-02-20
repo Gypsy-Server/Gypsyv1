@@ -324,12 +324,50 @@ function toggleTheme(){
 })();
 
 // ── SUBNET DETECT ─────────────────────────────────────────────────────────
-function getSubnet(){
+function getSubnetFromHostname(){
   const h=window.location.hostname;
   if(h&&h!=='localhost'&&h!=='127.0.0.1'){
     const p=h.split('.');
     if(p.length===4) return p.slice(0,3).join('.');
   }
+  return null;
+}
+
+function getLocalIPviaWebRTC(){
+  return new Promise(resolve=>{
+    const pc=new RTCPeerConnection({iceServers:[]});
+    const dc=pc.createDataChannel('');
+    pc.createOffer().then(o=>pc.setLocalDescription(o));
+    const timer=setTimeout(()=>{pc.close();resolve(null);},2000);
+    pc.onicecandidate=e=>{
+      if(!e||!e.candidate||!e.candidate.candidate) return;
+      const m=e.candidate.candidate.match(/(\d+\.\d+\.\d+\.\d+)/);
+      if(m){
+        const ip=m[1];
+        // skip link-local and loopback
+        if(!ip.startsWith('169.254.')&&ip!=='127.0.0.1'&&ip!=='0.0.0.0'){
+          clearTimeout(timer);
+          pc.close();
+          resolve(ip);
+        }
+      }
+    };
+  });
+}
+
+async function getSubnet(){
+  // 1. Try hostname (works when page is served from the local network IP)
+  const fromHost=getSubnetFromHostname();
+  if(fromHost) return fromHost;
+  // 2. Use WebRTC to find the browser's real local IP
+  try{
+    const localIP=await getLocalIPviaWebRTC();
+    if(localIP){
+      const parts=localIP.split('.');
+      if(parts.length===4) return parts.slice(0,3).join('.');
+    }
+  }catch(e){}
+  // 3. Fallback
   return '192.168.1';
 }
 
@@ -342,7 +380,8 @@ async function startScan(){
   S.scanning=true; S.cancelScan=false;
   document.getElementById('scanBtn').disabled=true;
   document.getElementById('scanOverlay').classList.add('active');
-  const subnet=getSubnet();
+  document.getElementById('scanStatus').textContent='Auto-detecting subnet...';
+  const subnet=await getSubnet();
   document.getElementById('scanStatus').textContent=`Probing ${subnet}.1–254...`;
   const sp=document.getElementById('scanProgress');
   sp.classList.add('active');
